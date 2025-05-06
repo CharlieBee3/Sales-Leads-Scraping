@@ -1,0 +1,190 @@
+import requests
+import json
+import time
+import csv
+from datetime import datetime
+
+def get_coffee_shops(api_key, location, radius=1500, page_token=None):
+    """
+    Fetch coffee shops within a radius of the specified location.
+    """
+    endpoint_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+    
+    # Using a more general search approach
+    params = {
+        'key': api_key,
+        'location': location,
+        'radius': radius,
+        'keyword': 'coffee'  # More general search term
+    }
+    
+    if page_token:
+        params['pagetoken'] = page_token
+    
+    # Print the exact URL being used (without the API key for security)
+    print(f"Requesting: {endpoint_url} with parameters (location={location}, radius={radius}, keyword=coffee)")
+    
+    try:
+        response = requests.get(endpoint_url, params=params)
+        print(f"Response status code: {response.status_code}")
+        results = json.loads(response.text)
+        
+        if 'error_message' in results:
+            print(f"API Error: {results['error_message']}")
+            print(f"Status: {results.get('status')}")
+            return [], None
+            
+        print(f"Found {len(results.get('results', []))} places in this batch")
+        return results.get('results', []), results.get('next_page_token')
+    except Exception as e:
+        print(f"Exception during request: {e}")
+        return [], None
+
+def get_place_details(api_key, place_id):
+    """
+    Get detailed information about a place including phone number.
+    """
+    endpoint_url = "https://maps.googleapis.com/maps/api/place/details/json"
+    
+    params = {
+        'key': api_key,
+        'place_id': place_id,
+        'fields': 'name,formatted_address,formatted_phone_number,website'
+    }
+    
+    try:
+        response = requests.get(endpoint_url, params=params)
+        result = json.loads(response.text)
+        
+        if 'error_message' in result:
+            print(f"Details API Error: {result['error_message']}")
+            print(f"Status: {result.get('status')}")
+            
+        return result.get('result', {})
+    except Exception as e:
+        print(f"Exception during details request: {e}")
+        return {}
+
+def find_coffee_shops_in_area(api_key, area_name, coordinates):
+    """
+    Find all coffee shops in an area and extract their phone numbers.
+    """
+    all_coffee_shops = []
+    page_token = None
+    
+    print(f"\n--- Searching for coffee shops in {area_name} ---")
+    
+    # We'll make multiple requests to get all pages of results
+    page = 1
+    while True:
+        print(f"\nFetching page {page} of results...")
+        # Get coffee shops from the current page
+        coffee_shops, next_page_token = get_coffee_shops(api_key, coordinates, radius=2000, page_token=page_token)
+        
+        # Process each coffee shop
+        for shop in coffee_shops:
+            place_id = shop.get('place_id')
+            name = shop.get('name', 'Unknown')
+            
+            # Basic filtering to ensure it's a coffee shop
+            if not any(keyword in name.lower() for keyword in ['coffee', 'cafe', 'espresso', 'brew']):
+                # Get more details to make a better determination
+                vicinity = shop.get('vicinity', '').lower()
+                types = shop.get('types', [])
+                
+                # If it doesn't look like a coffee shop from the name, check other attributes
+                if not (('cafe' in types) or 
+                       ('coffee' in vicinity) or 
+                       ('bakery' in types and 'cafe' in vicinity)):
+                    print(f"Skipping {name} - doesn't appear to be a coffee shop")
+                    continue
+                
+            print(f"Getting details for: {name}")
+            
+            # Get detailed information including phone number
+            details = get_place_details(api_key, place_id)
+            
+            coffee_shop_info = {
+                'name': details.get('name', name),
+                'address': details.get('formatted_address', 'Unknown'),
+                'phone': details.get('formatted_phone_number', 'Unknown'),
+                'website': details.get('website', 'Unknown')
+            }
+            
+            all_coffee_shops.append(coffee_shop_info)
+            print(f"✓ Found: {coffee_shop_info['name']} - {coffee_shop_info['phone']}")
+        
+        # If there are no more pages, break the loop
+        if not next_page_token:
+            break
+            
+        # Store the next page token
+        page_token = next_page_token
+        page += 1
+        
+        # Wait 2 seconds between requests to avoid hitting API rate limits
+        print("Waiting for next page token to become valid...")
+        time.sleep(2)
+    
+    return all_coffee_shops
+
+def save_to_csv(coffee_shops, area_name):
+    """
+    Save the coffee shop information to a CSV file.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{area_name}_coffee_shops_{timestamp}.csv"
+    
+    with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+        fieldnames = ['name', 'address', 'phone', 'website']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        writer.writeheader()
+        for shop in coffee_shops:
+            writer.writerow(shop)
+    
+    return filename
+
+def main():
+    # Using your actual Google Maps API key
+    api_key = "AIzaSyDlO_b55uueCmj7WYZlytp5fXDqJzOFjio"
+    
+    # Define the areas to search - multiple points in Dalston for better coverage
+    areas = {
+        'Dalston': '51.5462,-0.0753',  # Central Dalston
+        'Dalston Junction': '51.5459,-0.0749',  # Dalston Junction area
+        'Dalston Kingsland': '51.5484,-0.0780'  # Kingsland High Street area
+    }
+    
+    all_shops = []
+    
+    # Try multiple points in the Dalston area to ensure good coverage
+    for area_name, coordinates in areas.items():
+        coffee_shops = find_coffee_shops_in_area(api_key, area_name, coordinates)
+        print(f"\nFound {len(coffee_shops)} coffee shops near {area_name}")
+        all_shops.extend(coffee_shops)
+    
+    # Remove duplicates based on name
+    unique_shops = []
+    shop_names = set()
+    
+    for shop in all_shops:
+        if shop['name'] not in shop_names and shop['phone'] != 'Unknown':
+            shop_names.add(shop['name'])
+            unique_shops.append(shop)
+    
+    print(f"\n=== Found {len(unique_shops)} unique coffee shops in Dalston area with phone numbers ===")
+    
+    if unique_shops:
+        filename = save_to_csv(unique_shops, "Dalston")
+        print(f"Saved results to {filename}")
+        
+        # Print summary of results
+        print("\nCoffee Shops Found:")
+        for i, shop in enumerate(unique_shops, 1):
+            print(f"{i}. {shop['name']} - {shop['phone']}")
+    else:
+        print("No coffee shops found to save.")
+
+if __name__ == "__main__":
+    main()
