@@ -147,7 +147,7 @@ def save_to_csv(coffee_shops, area_name):
 
 def main():
     # Using your actual Google Maps API key
-    api_key = "AIzaSyDlO_b55uueCmj7WYZlytp5fXDqJzOFjio"
+    api_key = "key"
     
     # Define the areas to search - multiple points in Dalston for better coverage
     areas = {
